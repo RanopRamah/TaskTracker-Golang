@@ -6,186 +6,171 @@ import (
 	"fmt"
 	"golang.org/x/crypto/bcrypt"
 	"html/template"
-	"net/http"
 	"log"
+	"net/http"
+	"os"
 
 	_ "github.com/go-sql-driver/mysql"
 )
 
-// Struct untuk User dan Task
-type User struct {
+type Config struct {
+	Database struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+		Host     string `json:"host"`
+		Port     string `json:"port"`
+		DBName   string `json:"dbname"`
+	} `json:"database"`
+	Server struct {
+		Port string `json:"port"`
+	} `json:"server"`
+}
+
+var db *sql.DB
+var config Config
+
+// Mahasiswa struct
+type Mahasiswa struct {
 	NPM       int    `json:"npm"`
 	Username string `json:"username"`
 	Password string `json:"password"`
 }
 
+// Task struct
 type Task struct {
-	ID        int    `json:"id"`
-	Text      string `json:"text"`
-	Completed bool   `json:"completed"`
-	Deadline  string `json:"deadline"` // Format: dd/mm/yyyy (jam)
-	MahasiswaNPM    int    `json:"mahasiswa_npm"`
+	ID           int    `json:"id"`
+	Text         string `json:"text"`
+	Completed    bool   `json:"completed"`
+	Deadline     string `json:"deadline"`
+	MahasiswaNPM int    `json:"mahasiswa_npm"`
 }
 
-var db *sql.DB
+// Fungsi untuk memuat konfigurasi
+func loadConfig() {
+	file, err := os.ReadFile("config.json")
+	if err != nil {
+		log.Fatal("Error reading config.json: ", err)
+	}
 
-// Menyiapkan koneksi ke MySQL
+	err = json.Unmarshal(file, &config)
+	if err != nil {
+		log.Fatal("Error parsing config.json: ", err)
+	}
+}
+
+// Fungsi untuk inisialisasi database
 func initDB() {
+	loadConfig()
+
+	dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s", 
+		config.Database.Username, 
+		config.Database.Password, 
+		config.Database.Host, 
+		config.Database.Port, 
+		config.Database.DBName)
+
 	var err error
-	db, err = sql.Open("mysql", "root:password@tcp(127.0.0.1:3306)/tasktracker") // Ganti username, password, dan dbname sesuai konfigurasi MySQL Anda
+	db, err = sql.Open("mysql", dsn)
 	if err != nil {
-		log.Fatal("Error connecting to the database:", err)
+		log.Fatal("Error connecting to database: ", err)
 	}
-}
 
-// Fungsi utama server
-func main() {
-	initDB() // Inisialisasi koneksi database
-
-	// Routes
-	http.HandleFunc("/", serveHome)
-	http.HandleFunc("/tasks", handleTasks)
-	http.HandleFunc("/register", handleRegister)
-	http.HandleFunc("/login", handleLogin)
-	http.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("static"))))
-
-	// Menjalankan server
-	fmt.Println("Server running on http://localhost:8080")
-	http.ListenAndServe(":8080", nil)
-}
-
-// Menyajikan halaman home
-func serveHome(w http.ResponseWriter, r *http.Request) {
-	tmpl, err := template.ParseFiles("templates/index.html")
+	err = db.Ping()
 	if err != nil {
-		http.Error(w, "Error loading template", http.StatusInternalServerError)
-		return
+		log.Fatal("Error pinging database: ", err)
 	}
 
-	// Mengambil daftar task dari database
-	tasks, err := getTasksFromDB()
-	if err != nil {
-		http.Error(w, "Error fetching tasks", http.StatusInternalServerError)
-		return
-	}
-
-	tmpl.Execute(w, tasks)
+	fmt.Println("Database connected successfully!")
 }
 
-// Menangani task (CRUD)
-func handleTasks(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case "GET":
-		// Ambil daftar task
-		tasks, err := getTasksFromDB()
-		if err != nil {
-			http.Error(w, "Error fetching tasks", http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(tasks)
-	case "POST":
-		var newTask Task
-		err := json.NewDecoder(r.Body).Decode(&newTask)
-		if err != nil {
-			http.Error(w, "Invalid input", http.StatusBadRequest)
-			return
-		}
-
-		// Menyimpan task ke database
-		err = saveTaskToDB(newTask)
-		if err != nil {
-			http.Error(w, "Error saving task", http.StatusInternalServerError)
-			return
-		}
-		w.WriteHeader(http.StatusCreated)
-	case "DELETE":
-		// Hapus semua task
-		err := deleteAllTasks()
-		if err != nil {
-			http.Error(w, "Error deleting tasks", http.StatusInternalServerError)
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-	default:
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-	}
-}
-
-// Menyimpan task ke dalam database
-func saveTaskToDB(task Task) error {
-	_, err := db.Exec("INSERT INTO tasks (text, completed, deadline, mahasiswa_npm) VALUES (?, ?, ?, ?)",
-		task.Text, task.Completed, task.Deadline, task.MahasiswaNPM)
-	return err
-}
-
-// Mengambil daftar task dari database
+// Fungsi untuk mengambil data task dari database
 func getTasksFromDB() ([]Task, error) {
 	rows, err := db.Query("SELECT id, text, completed, deadline, mahasiswa_npm FROM tasks")
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("Error querying database: %v", err)
 	}
 	defer rows.Close()
 
 	var tasks []Task
 	for rows.Next() {
 		var task Task
-		err := rows.Scan(&task.ID, &task.Text, &task.Completed, &task.Deadline, &task.MahasiswaNPM)
+		var deadline sql.NullString
+		err := rows.Scan(&task.ID, &task.Text, &task.Completed, &deadline, &task.MahasiswaNPM)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("Error scanning row: %v", err)
 		}
+
+		if deadline.Valid {
+			task.Deadline = deadline.String
+		} else {
+			task.Deadline = ""
+		}
+
 		tasks = append(tasks, task)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("Error iterating over rows: %v", err)
 	}
 
 	return tasks, nil
 }
 
-// Menghapus semua task dari database
-func deleteAllTasks() error {
-	_, err := db.Exec("DELETE FROM tasks")
+// Fungsi untuk menyimpan task ke database
+func saveTaskToDB(task Task) error {
+	_, err := db.Exec("INSERT INTO tasks (text, completed, deadline, mahasiswa_npm) VALUES (?, ?, ?, ?)", 
+		task.Text, task.Completed, task.Deadline, task.MahasiswaNPM)
 	return err
 }
 
-// Fungsi Register
-func handleRegister(w http.ResponseWriter, r *http.Request) {
-	if r.Method == "POST" {
-		var newUser User
-		err := json.NewDecoder(r.Body).Decode(&newUser)
-		if err != nil {
-			http.Error(w, "Invalid input", http.StatusBadRequest)
-			return
-		}
-
-		// Hash password
-		hashedPassword, err := bcrypt.GenerateFromPassword([]byte(newUser.Password), bcrypt.DefaultCost)
-		if err != nil {
-			http.Error(w, "Error hashing password", http.StatusInternalServerError)
-			return
-		}
-		newUser.Password = string(hashedPassword)
-
-		// Menyimpan user ke database
-		_, err = db.Exec("INSERT INTO mahasiswa (username, password) VALUES (?, ?)", newUser.Username, newUser.Password)
-		if err != nil {
-			http.Error(w, "Error saving user", http.StatusInternalServerError)
-			return
-		}
-		http.Redirect(w, r, "/login", http.StatusSeeOther)
-	}
+// Fungsi untuk menghapus task dari database
+func deleteTaskFromDB(id int) error {
+	_, err := db.Exec("DELETE FROM tasks WHERE id = ?", id)
+	return err
 }
 
-// Fungsi Login
+// Handler untuk halaman utama
+func serveHome(w http.ResponseWriter, r *http.Request) {
+	var taskCount int
+	err := db.QueryRow("SELECT COUNT(*) FROM tasks").Scan(&taskCount)
+	if err != nil {
+		http.Error(w, "Error checking tasks", http.StatusInternalServerError)
+		return
+	}
+
+	if taskCount == 0 {
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return
+	}
+
+	tasks, err := getTasksFromDB()
+	if err != nil {
+		http.Error(w, "Error fetching tasks", http.StatusInternalServerError)
+		return
+	}
+
+	tmpl, err := template.ParseFiles("templates/index.html")
+	if err != nil {
+		http.Error(w, "Error loading template", http.StatusInternalServerError)
+		return
+	}
+
+	tmpl.Execute(w, tasks)
+}
+
+// Handler untuk login
 func handleLogin(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "POST" {
-		var loginUser User
-		err := json.NewDecoder(r.Body).Decode(&loginUser)
+		var loginMahasiswa Mahasiswa
+		err := json.NewDecoder(r.Body).Decode(&loginMahasiswa)
 		if err != nil {
 			http.Error(w, "Invalid input", http.StatusBadRequest)
 			return
 		}
 
-		// Ambil data user berdasarkan username
-		row := db.QueryRow("SELECT id, password FROM mahasiswa WHERE username = ?", loginUser.Username)
+		query := "SELECT npm, password FROM mahasiswa WHERE npm = ?"
+		row := db.QueryRow(query, loginMahasiswa.NPM)
+
 		var storedPassword string
 		var mahasiswaNPM int
 		err = row.Scan(&mahasiswaNPM, &storedPassword)
@@ -194,15 +179,63 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Verifikasi password
-		err = bcrypt.CompareHashAndPassword([]byte(storedPassword), []byte(loginUser.Password))
+		err = bcrypt.CompareHashAndPassword([]byte(storedPassword), []byte(loginMahasiswa.Password))
 		if err != nil {
 			http.Error(w, "Invalid credentials", http.StatusUnauthorized)
 			return
 		}
 
-		// Set session atau token login untuk user
-		// Misalnya redirect ke halaman utama
+		// Simpan session
 		http.Redirect(w, r, "/", http.StatusSeeOther)
+	}
+}
+
+// Handler untuk register
+func handleRegister(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPost {
+		err := r.ParseForm()
+		if err != nil {
+			http.Error(w, "Error parsing form", http.StatusBadRequest)
+			return
+		}
+
+		npm := r.FormValue("npm")
+		username := r.FormValue("username")
+		password := r.FormValue("password")
+
+		if npm == "" || username == "" || password == "" {
+			http.Error(w, "All fields are required", http.StatusBadRequest)
+			return
+		}
+
+		hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+		if err != nil {
+			http.Error(w, "Error hashing password", http.StatusInternalServerError)
+			return
+		}
+
+		_, err = db.Exec("INSERT INTO mahasiswa (npm, username, password) VALUES (?, ?, ?)", npm, username, string(hashedPassword))
+		if err != nil {
+			http.Error(w, "Failed to register", http.StatusInternalServerError)
+			return
+		}
+
+		http.Redirect(w, r, "/login", http.StatusFound)
+	} else {
+		http.ServeFile(w, r, "templates/register.html")
+	}
+}
+
+func main() {
+	initDB()
+
+	http.HandleFunc("/", serveHome)
+	http.HandleFunc("/login", handleLogin)
+	http.HandleFunc("/register", handleRegister)
+	http.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("static"))))
+
+	fmt.Println("Server running on http://localhost:8080")
+	if err := http.ListenAndServe(":8080", nil); err != nil {
+		log.Fatal(err)
 	}
 }

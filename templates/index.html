@@ -4,21 +4,124 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Student - TaskTracker</title>
-    <link rel="stylesheet" href="static/styles.css">
+    <title>Task Tracker</title>
+    <link rel="stylesheet" href="/static/styles.css">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Poppins:ital,wght@0,100;0,200;0,300;0,400;0,500;0,600;0,700;0,800;0,900;1,100;1,200;1,300;1,400;1,500;1,600;1,700;1,800;1,900&display=swap" rel="stylesheet">
 </head>
 
 <body>
-    <div class="container">
-        <h1>Task List</h1>
-        <input class="task-input" type="text" id="taskInput" placeholder="Masukkan tugas baru">
-        <button onclick="addTask()">Tambah Tugas</button>
-        <ul id="taskList"></ul>
-    </div>
-    <script src="/static/script.js"></script>
+    <header>
+        <h1>Task Tracker</h1>
+        <nav>
+            <a href="/">Home</a>
+            <a href="/tasks">Tasks</a>
+            <a href="/login">Login</a>
+            <a href="/register">Register</a>
+        </nav>
+    </header>
+
+    <main>
+        <h2>Task List</h2>
+
+        <!-- Form for adding tasks -->
+        <form id="addTaskForm">
+            <label for="taskText">Task:</label>
+            <input type="text" id="taskText" name="text" required placeholder="Task description">
+
+            <label for="deadline">Deadline:</label>
+            <input type="datetime-local" id="deadline" name="deadline" required>
+
+            <button type="submit">Add Task</button>
+        </form>
+
+        <h3>All Tasks</h3>
+        <table id="taskTable">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Task</th>
+                    <th>Status</th>
+                    <th>Deadline</th>
+                    <th>Action</th>
+                </tr>
+            </thead>
+            <tbody>
+                {{range .}}
+                <tr>
+                    <td>{{.ID}}</td>
+                    <td>{{.Text}}</td>
+                    <td>{{if .Completed}}Completed{{else}}Pending{{end}}</td>
+                    <td>{{.Deadline}}</td>
+                    <td>
+                        <!-- Tombol dengan ID yang benar -->
+                        <button onclick="deleteTask('{{.ID}}')">Delete</button>
+                    </td>
+                </tr>
+                {{end}}
+            </tbody>
+
+        </table>
+    </main>
+
+    <footer>
+        <p>&copy; 2025 Task Tracker</p>
+    </footer>
+
+    <script>
+        // Function to delete a task
+        function deleteTask(taskID) {
+            if (confirm("Are you sure you want to delete this task?")) {
+                fetch('/tasks', {
+                        method: 'DELETE',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            id: taskID
+                        }),
+                    })
+                    .then(response => {
+                        if (response.ok) {
+                            alert('Task deleted successfully');
+                            location.reload(); // Refresh the page
+                        } else {
+                            alert('Failed to delete task');
+                        }
+                    });
+            }
+        }
+
+        // Function to add a new task
+        const form = document.getElementById('addTaskForm');
+        form.addEventListener('submit', function(event) {
+            event.preventDefault();
+
+            const taskText = document.getElementById('taskText').value;
+            const deadline = document.getElementById('deadline').value;
+
+            fetch('/tasks', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        text: taskText,
+                        deadline: deadline,
+                        completed: false,
+                    }),
+                })
+                .then(response => response.json())
+                .then(data => {
+                    alert('Task added successfully');
+                    location.reload(); // Refresh the page
+                })
+                .catch(error => {
+                    alert('Failed to add task');
+                });
+        });
+    </script>
 </body>
 
 </html>
