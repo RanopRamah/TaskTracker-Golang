@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/joho/godotenv"
 	_ "github.com/go-sql-driver/mysql"
 )
 
@@ -45,36 +46,33 @@ type Task struct {
 	MahasiswaNPM int    `json:"mahasiswa_npm"`
 }
 
-// Fungsi untuk memuat konfigurasi
-func loadConfig() {
-	file, err := os.ReadFile("config.json")
+func initEnv() {
+	err := godotenv.Load()
 	if err != nil {
-		log.Fatal("Error reading config.json: ", err)
-	}
-
-	err = json.Unmarshal(file, &config)
-	if err != nil {
-		log.Fatal("Error parsing config.json: ", err)
+		log.Fatal("Error loading .env file: ", err)
 	}
 }
 
-// Fungsi untuk inisialisasi database
 func initDB() {
-	loadConfig()
+	initEnv() // Memuat variabel lingkungan dari .env
 
-	dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s", 
-		config.Database.Username, 
-		config.Database.Password, 
-		config.Database.Host, 
-		config.Database.Port, 
-		config.Database.DBName)
+	// Membuat string koneksi MySQL
+	dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s",
+		os.Getenv("DB_USERNAME"),
+		os.Getenv("DB_PASSWORD"),
+		os.Getenv("DB_HOST"),
+		os.Getenv("DB_PORT"),
+		os.Getenv("DB_NAME"),
+	)
 
+	// Membuka koneksi ke database
 	var err error
 	db, err = sql.Open("mysql", dsn)
 	if err != nil {
 		log.Fatal("Error connecting to database: ", err)
 	}
 
+	// Menguji koneksi ke database
 	err = db.Ping()
 	if err != nil {
 		log.Fatal("Error pinging database: ", err)
@@ -160,7 +158,7 @@ func serveHome(w http.ResponseWriter, r *http.Request) {
 
 // Handler untuk login
 func handleLogin(w http.ResponseWriter, r *http.Request) {
-	if r.Method == "POST" {
+	if r.Method == http.MethodPost {
 		var loginMahasiswa Mahasiswa
 		err := json.NewDecoder(r.Body).Decode(&loginMahasiswa)
 		if err != nil {
@@ -185,57 +183,80 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Simpan session
+		// Simpan session (opsional, tambahkan sesi sesuai kebutuhan)
 		http.Redirect(w, r, "/", http.StatusSeeOther)
+		return
 	}
+
+	// Jika GET, tampilkan halaman login
+	tmpl, err := template.ParseFiles("templates/login.html")
+	if err != nil {
+		http.Error(w, "Error loading login template", http.StatusInternalServerError)
+		return
+	}
+
+	tmpl.Execute(w, nil)
 }
 
 // Handler untuk register
 func handleRegister(w http.ResponseWriter, r *http.Request) {
-	if r.Method == http.MethodPost {
-		err := r.ParseForm()
-		if err != nil {
-			http.Error(w, "Error parsing form", http.StatusBadRequest)
-			return
-		}
-
-		npm := r.FormValue("npm")
-		username := r.FormValue("username")
-		password := r.FormValue("password")
-
-		if npm == "" || username == "" || password == "" {
-			http.Error(w, "All fields are required", http.StatusBadRequest)
-			return
-		}
-
-		hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
-		if err != nil {
-			http.Error(w, "Error hashing password", http.StatusInternalServerError)
-			return
-		}
-
-		_, err = db.Exec("INSERT INTO mahasiswa (npm, username, password) VALUES (?, ?, ?)", npm, username, string(hashedPassword))
-		if err != nil {
-			http.Error(w, "Failed to register", http.StatusInternalServerError)
-			return
-		}
-
-		http.Redirect(w, r, "/login", http.StatusFound)
-	} else {
+	if r.Method != http.MethodPost {
 		http.ServeFile(w, r, "templates/register.html")
+		return
 	}
+
+	err := r.ParseForm()
+	if err != nil {
+		http.Error(w, "Error parsing form", http.StatusBadRequest)
+		return
+	}
+
+	npm := r.FormValue("npm")
+	username := r.FormValue("username")
+	password := r.FormValue("password")
+
+	if npm == "" || username == "" || password == "" {
+		http.Error(w, "All fields are required", http.StatusBadRequest)
+		return
+	}
+
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		http.Error(w, "Error hashing password", http.StatusInternalServerError)
+		return
+	}
+
+	_, err = db.Exec("INSERT INTO mahasiswa (npm, username, password) VALUES (?, ?, ?)", npm, username, string(hashedPassword))
+	if err != nil {
+		http.Error(w, "Failed to register", http.StatusInternalServerError)
+		return
+	}
+
+	http.Redirect(w, r, "/login", http.StatusFound)
 }
 
 func main() {
+	// Memuat variabel lingkungan hanya sekali
+	initEnv()
+
+	// Inisialisasi koneksi database
 	initDB()
 
+	// Rute aplikasi
 	http.HandleFunc("/", serveHome)
 	http.HandleFunc("/login", handleLogin)
 	http.HandleFunc("/register", handleRegister)
 	http.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("static"))))
 
-	fmt.Println("Server running on http://localhost:8080")
-	if err := http.ListenAndServe(":8080", nil); err != nil {
+	// Membaca port server dari variabel lingkungan
+	port := os.Getenv("SERVER_PORT")
+	if port == "" {
+		port = "8080" // Gunakan port default jika tidak ada variabel lingkungan
+	}
+
+	// Menjalankan server
+	fmt.Printf("Server running on http://localhost:%s\n", port)
+	if err := http.ListenAndServe(":"+port, nil); err != nil {
 		log.Fatal(err)
 	}
 }
